@@ -6,8 +6,8 @@ from argparse import ArgumentParser, FileType, ArgumentDefaultsHelpFormatter
 import sys
 import numpy as np
 from sklearn import preprocessing
-from data_utils import DataUtils
-from graph_utils import GraphUtils
+from .data_utils import DataUtils
+from .graph_utils import GraphUtils
 import random
 import math
 import os
@@ -21,6 +21,7 @@ from sklearn.metrics import average_precision_score,auc,precision_recall_fscore_
 def init_embedding_vectors(node_u, node_v, node_list_u, node_list_v, args):
     """
     initialize embedding vectors
+    注意，该函数是个副作用，直接改变传入的集合，无需返回
     :param node_u:
     :param node_v:
     :param node_list_u:
@@ -33,6 +34,7 @@ def init_embedding_vectors(node_u, node_v, node_list_u, node_list_v, args):
         vectors = np.random.random([1, args.d])
         help_vectors = np.random.random([1, args.d])
         node_list_u[i] = {}
+        # 在word embedding中，同一个元素有两个embedding向量，一个是本身的embedding，一个是context embedding
         node_list_u[i]['embedding_vectors'] = preprocessing.normalize(vectors, norm='l2')
         node_list_u[i]['context_vectors'] = preprocessing.normalize(help_vectors, norm='l2')
     # item
@@ -54,6 +56,7 @@ def walk_generator(gul,args):
     """
     gul.calculate_centrality()
     if args.large == 0:
+        # not large bipartite
         gul.homogeneous_graph_random_walks(percentage=args.p, maxT=args.maxT, minT=args.minT)
     elif args.large == 1:
         gul.homogeneous_graph_random_walks_for_large_bipartite_graph(percentage=args.p, maxT=args.maxT, minT=args.minT)
@@ -100,11 +103,14 @@ def skip_gram(center, contexts, negs, node_list, lam, pa):
     I_z = {center: 1}  # indication function
     for node in negs:
         I_z[node] = 0
+    # 获取context的embedding
     V = np.array(node_list[contexts]['embedding_vectors'])
+    # 初始化update，这个update就是embedding向量的更新方向
     update = [[0] * V.size]
     for u in I_z.keys():
         if node_list.get(u) is  None:
             pass
+        # 获取u点的context embedding
         Theta = np.array(node_list[u]['context_vectors'])
         X = float(V.dot(Theta.T))
         sigmod = 1.0 / (1 + (math.exp(-X * 1.0)))
@@ -142,6 +148,7 @@ def KL_divergence(edge_dict_u, u, v, node_list_u, node_list_v, lam, gamma):
 
     sigmod = 1.0 / (1 + (math.exp(-X * 1.0)))
 
+    # kl divergence损失分别对于向量u_i，u_j进行求导得到的更新方向
     update_u += gamma * lam * ((e_ij * (1 - sigmod)) * 1.0 / math.log(math.e, math.e)) * V
     update_v += gamma * lam * ((e_ij * (1 - sigmod)) * 1.0 / math.log(math.e, math.e)) * U
 
@@ -320,36 +327,47 @@ def train_by_sampling(args):
     edge_list = gul.edge_list
     walk_generator(gul,args)
     print("getting context and negative samples....")
+    # 获取negative samples
     context_dict_u, neg_dict_u, context_dict_v, neg_dict_v, node_u, node_v = get_context_and_negative_samples(gul, args)
     node_list_u, node_list_v = {}, {}
+    # 初始化占位符
     init_embedding_vectors(node_u, node_v, node_list_u, node_list_v, args)
     last_loss, count, epsilon = 0, 0, 1e-3
  
     print("============== training ==============")
     for iter in range(0, args.max_iter):
+        # epoch循环
         s1 = "\r[%s%s]%0.2f%%"%("*"* iter," "*(args.max_iter-iter),iter*100.0/(args.max_iter-1))
         loss = 0
+        # 记录节点u被访问的次数，初始化为0次
         visited_u = dict(zip(node_list_u.keys(), [0] * len(node_list_u.keys())))
         visited_v = dict(zip(node_list_v.keys(), [0] * len(node_list_v.keys())))
         random.shuffle(edge_list)
+        # 遍历所有边
         for i in range(len(edge_list)):
             u, v, w = edge_list[i]
-              
+
+            # length不是window内的context元素，而是节点u在skipgram采样中，采集了以节点u为当前节点的window数量
             length = len(context_dict_u[u])
             random.shuffle(context_dict_u[u])
+            # 如果节点u的访问次数小于采集的以u为中心节点的window数量个数
             if visited_u.get(u) < length:
                 # print(u)
                 index_list = list(range(visited_u.get(u),min(visited_u.get(u)+1,length)))
+                # 遍历当前中心节点的所有window，事实上根据上一句的表达，这里index_list最多一个元素
                 for index in index_list:
+                    # 获取当前的context
                     context_u = context_dict_u[u][index]
                     neg_u = neg_dict_u[u][index]
                     # center,context,neg,node_list,eta
+                    # 遍历当前context的所有元素节点
                     for z in context_u:
                         tmp_z, tmp_loss = skip_gram(u, z, neg_u, node_list_u, lam, alpha)
                         node_list_u[z]['embedding_vectors'] += tmp_z
                         loss += tmp_loss
                 visited_u[u] = index_list[-1]+3
 
+            # v类型节点同理
             length = len(context_dict_v[v])
             random.shuffle(context_dict_v[v])
             if visited_v.get(v) < length:
@@ -365,6 +383,7 @@ def train_by_sampling(args):
                         loss += tmp_loss
                 visited_v[v] = index_list[-1]+3
 
+            # 边co-occurrence的损失
             update_u, update_v, tmp_loss = KL_divergence(edge_dict_u, u, v, node_list_u, node_list_v, lam, gamma)
             loss += tmp_loss
             node_list_u[u]['embedding_vectors'] += update_u
@@ -376,6 +395,7 @@ def train_by_sampling(args):
         else:
             lam *= 0.95
         last_loss = loss
+        # 训练终止条件，损失变化小于epsilon
         if delta_loss < epsilon:
             break
         sys.stdout.write(s1)

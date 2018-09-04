@@ -33,10 +33,13 @@ __email__ = "bperozzi@cs.stonybrook.edu"
 LOGFORMAT = "%(asctime).19s %(levelname)s %(filename)s: %(lineno)s %(message)s"
 
 class Graph(defaultdict):
-  """Efficient basic implementation of nx `Graph' â€“ Undirected graphs with self loops"""
+  """Efficient basic implementation of nx `Graph' â€“ Undirected graphs with self loops
+    可以看到，该graph继承自defaultdict类，因此也可以像使用dict一样使用它
+  """
   act = {}
   isWeight = False
   def __init__(self):
+    # 这里注册了list内建函数，即dict的默认value值为list
     super(Graph, self).__init__(list)
 
   def setIsWeight(self,isWeight):
@@ -80,13 +83,16 @@ class Graph(defaultdict):
     t0 = time()
 
     if self.isWeight == True:
+      # 有weight的情况
       for k in iterkeys(self):
         self[k] = self.sortedDictValues(self[k])
         t1 = time()
         logger.info('make_consistent: made consistent in {}s'.format(t1-t0))
         self.remove_self_loops_dict()
     else:
+      # 没有weight的情况
       for k in iterkeys(self):
+        #   每个键所对应的list的所有取值排序
         self[k] = list(sorted(set(self[k])))
     t1 = time()
     logger.info('make_consistent: made consistent in {}s'.format(t1-t0))
@@ -98,8 +104,10 @@ class Graph(defaultdict):
 
 
   def sortedDictValues(self,adict):
+    ''' 将一个dict里的所有元素进行排序，并获取排序后的key所对应的value值 '''
     keys = adict.keys()
     keys.sort()
+    # map是函数式编程概念，map(func, *iterables)
     return map(adict.get, keys)
 
   def make_consistent_dict(self):
@@ -116,16 +124,20 @@ class Graph(defaultdict):
 
 
   def remove_self_loops(self):
+    '''  删去二跳跳回来的那些节点  '''
 
     removed = 0
     t0 = time()
     if self.isWeight == True:
       for x in self:
+          # 遍历defaultdict时，得到的x是key，而非整个item
           if x in self[x].keys():
               del self[x][x]
               removed += 1
     else:
       for x in self:
+        # 如果key值也在该key所在的value里，那么就是说x的二阶跳又跳回来，经过A*A^T每次各节点都会有个回环的节点，
+        # 这个必须删去
         if x in self[x]:
           self[x].remove(x)
           removed += 1
@@ -223,29 +235,39 @@ class Graph(defaultdict):
 
   def random_walk_restart(self, nodes, percentage, alpha=0, rand=random.Random(), start=None):
     """ Returns a truncated random walk.
-        percentage: probability of stopping walking
+        percentage: probability of stopping walking，停止walking的概率，用random.random() > percentage来控制
         alpha: probability of restarts.
         start: the start node of the random walk.
     """
     G = self
     if start:
+      # 初始化第一步为当前节点
       path = [start]
     else:
       # Sampling is uniform w.r.t V, and not w.r.t E
+      # 对于所有的节点v，进行uniform采样
       path = [rand.choice(nodes)]
 
+    # 随机采样，控制停止的条件主要是随机数控制，比如percentage为0.3，那么每次有0.3的可能性停止
     while len(path) < 1 or random.random() > percentage:
+      # 最近的节点为当前节点
       cur = path[-1]
       if len(G[cur]) > 0:
+        # cur在G上的邻居节点数量大于0，这样才有必要进行采样
         if rand.random() >= alpha:
+          # 进入采样流程后还设置一个采样因子
+          # 邻居中随便选个
           add_node = rand.choice(G[cur])
           while add_node == cur:
+            # 不采样自己，去除loop后，不会采样到自己
             add_node = rand.choice(G[cur])
           path.append(add_node)
         else:
           path.append(path[0])
       else:
         break
+
+    # 返回start节点开始的采样路径序列
     return path
       # neighbors = []
       # for n in G[cur]:
@@ -318,13 +340,20 @@ def build_deepwalk_corpus(G, num_paths, path_length, alpha=0,
 def build_deepwalk_corpus_random(G, hits_dict, percentage, maxT, minT, alpha=0, rand = random.Random()):
   walks = []
   nodes = list(G.nodes())
+  # 遍历所有节点
   for node in nodes:
+    # 当前节点可以随机walk的路径数和该节点的centralty有关，centralty越大，则可以允许采样的路径就越多，这个思想非常好！
+    # 对于度数大的节点，采样更多的节点是非常有帮助的
     num_paths = max(int(math.ceil(maxT * hits_dict[node])),minT)
     # print num_paths,
+    # 这里就是采样num_paths次
     for cnt in range(num_paths):
+     # 每次采样，重新开始从当前节点start=node采样
      walks.append(G.random_walk_restart(nodes, percentage,rand=rand, alpha=alpha, start=node))
 
+  # 将开始节点shuffle一下，这样从哪个节点开始就随机了
   random.shuffle(walks)
+  # 返回所有节点的随机游走序列
   return walks
 
 def build_deepwalk_corpus_random_for_large_bibartite_graph(G, hits_dict, percentage, maxT, minT, alpha=0, rand = random.Random(), node_type='u'):
@@ -428,11 +457,16 @@ def load_adjacencylist(file_, undirected=False, chunksize=10000, unchecked=True)
 
 
 def load_edgelist(file_, undirected=True):
+  # 该Graph是自定义的graph，而不是networkx的graph
+  # 该Graph是defaultdict的子类，因此可以当做dict用
+  # defaultdict类似于Guava包中的MultiSets，可以保存同一个key的多个值，多个值存在一个list中
+  # 存值格式为： {key1: [val1, val2], key2: []}
   G = Graph()
   #adddddd
   with open(file_,encoding="UTF-8") as f:
     for l in f:
       x, y = l.strip().split()[:2]
+      # 这里可以体现出defaultdict的value值是list的做法了
       G[x].append(y)
       if undirected:
         G[y].append(x)
@@ -440,6 +474,7 @@ def load_edgelist(file_, undirected=True):
   return G
 
 def load_edgelist_from_matrix(matrix, undirected=True):
+  ''' 通过matrix构建图，而load_edgelist通过文件构件图 '''
   G = Graph()
   #adddddd
   for x in matrix.keys():
